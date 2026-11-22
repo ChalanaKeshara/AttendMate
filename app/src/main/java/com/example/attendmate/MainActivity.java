@@ -3,12 +3,6 @@ package com.example.attendmate;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
-import android.content.ContentValues;
-import android.content.Context;
-import android.content.res.ColorStateList;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -18,59 +12,233 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.text.ParseException;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldValue;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.WriteBatch;
+
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Date;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends Activity {
 
+    private FirebaseAuth auth;
+    private FirebaseFirestore firestore;
+    private String uid;
+
     private LinearLayout subjectListContainer;
     private TextView txtPercentage, txtSubjects, txtPresent, txtAbsent;
-    private ProgressBar attendanceProgress;
-    private SubjectDatabase database;
+    private CircularProgressView circularProgress;
 
-    private final int BLUE = Color.rgb(22, 119, 232);
-    private final int BRIGHT_BLUE = Color.rgb(57, 165, 255);
     private final int WHITE = Color.WHITE;
     private final int LIGHT_TEXT = Color.rgb(184, 201, 226);
+    private final int BLUE = Color.rgb(22, 119, 232);
     private final int DARK_TEXT = Color.rgb(20, 35, 55);
+
+    private final List<Subject> subjects = new ArrayList<>();
+    private final List<AttendanceRecord> attendanceRecords =
+            new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+            openLogin();
+            return;
+        }
+
         setContentView(R.layout.activity_main);
 
-        database = new SubjectDatabase(this);
+        auth = FirebaseAuth.getInstance();
+        firestore = FirebaseFirestore.getInstance();
+        uid = auth.getCurrentUser().getUid();
 
         subjectListContainer = findViewById(R.id.subjectListContainer);
         txtPercentage = findViewById(R.id.txtPercentage);
         txtSubjects = findViewById(R.id.txtSubjects);
         txtPresent = findViewById(R.id.txtPresent);
         txtAbsent = findViewById(R.id.txtAbsent);
-        attendanceProgress = findViewById(R.id.attendanceProgress);
+        circularProgress = findViewById(R.id.attendanceCircularProgress);
 
-        Button btnAddSubject = findViewById(R.id.btnAddSubject);
-        btnAddSubject.setOnClickListener(v -> showAddSubjectDialog());
+        Button addButton = findViewById(R.id.btnAddSubject);
+        addButton.setOnClickListener(v -> showAddSubjectDialog());
 
-        loadSubjects();
-        updateDashboard();
+        Button logoutButton = findViewById(R.id.btnLogout);
+        logoutButton.setOnClickListener(v -> logout());
+
+        migrateOldData();
     }
 
+    private void openLogin() {
+        startActivity(new android.content.Intent(
+                this, LoginActivity.class));
+        finish();
+    }
+
+    private void logout() {
+        auth.signOut();
+        openLogin();
+    }
+
+    // ---------------- FIREBASE PATHS ----------------
+
+    private com.google.firebase.firestore.CollectionReference
+    subjectsRef() {
+        return firestore.collection("users")
+                .document(uid).collection("subjects");
+    }
+
+    private com.google.firebase.firestore.CollectionReference
+    attendanceRef() {
+        return firestore.collection("users")
+                .document(uid).collection("attendance");
+    }
+
+    private com.google.firebase.firestore.DocumentReference
+    migrationRef() {
+        return firestore.collection("users")
+                .document(uid).collection("metadata")
+                .document("migration");
+    }
+
+    // ---------------- OLD SQLITE MIGRATION ----------------
+
+    private void migrateOldData() {
+
+        migrationRef().get().addOnSuccessListener(marker -> {
+
+            if (Boolean.TRUE.equals(
+                    marker.getBoolean("sqliteV2Imported"))) {
+                loadFirebaseData();
+                return;
+            }
+
+            LocalDatabase localDB = new LocalDatabase(this);
+
+            ArrayList<LocalDatabase.Subject> oldSubjects =
+                    localDB.getAllSubjects();
+
+            ArrayList<LocalDatabase.AttendanceRecord> oldRecords =
+                    localDB.getAllAttendance();
+
+            WriteBatch batch = firestore.batch();
+
+            for (LocalDatabase.Subject old : oldSubjects) {
+
+                String subjectId = String.valueOf(old.id);
+
+                Map<String, Object> subjectData = new HashMap<>();
+                subjectData.put("id", subjectId);
+                subjectData.put("name", old.name);
+
+                batch.set(subjectsRef().document(subjectId), subjectData);
+            }
+
+            for (LocalDatabase.AttendanceRecord old : oldRecords) {
+
+                String subjectId = String.valueOf(old.subjectId);
+                String documentId = subjectId + "_" + old.date;
+
+                Map<String, Object> attendanceData = new HashMap<>();
+                attendanceData.put("id", documentId);
+                attendanceData.put("subjectId", subjectId);
+                attendanceData.put("date", old.date);
+                attendanceData.put("status", old.status);
+
+                batch.set(attendanceRef().document(documentId),
+                        attendanceData);
+            }
+
+            batch.commit().addOnSuccessListener(unused -> {
+
+                Map<String, Object> migrationData = new HashMap<>();
+                migrationData.put("sqliteV2Imported", true);
+                migrationData.put("migratedAt", FieldValue.serverTimestamp());
+
+                migrationRef().set(migrationData)
+                        .addOnSuccessListener(result -> {
+                            Toast.makeText(this,
+                                    "Old records migrated successfully",
+                                    Toast.LENGTH_LONG).show();
+                            loadFirebaseData();
+                        })
+                        .addOnFailureListener(error ->
+                                showError("Migration marker failed: "
+                                        + error.getMessage()));
+
+            }).addOnFailureListener(error ->
+                    showError("Migration failed. Old records are safe. "
+                            + error.getMessage()));
+
+        }).addOnFailureListener(error ->
+                showError("Unable to check migration: "
+                        + error.getMessage()));
+    }
+
+    // ---------------- LOAD FIREBASE DATA ----------------
+
+    private void loadFirebaseData() {
+
+        subjectsRef().get().addOnSuccessListener(subjectSnapshot -> {
+
+            subjects.clear();
+
+            for (DocumentSnapshot document : subjectSnapshot) {
+                Subject subject = new Subject(
+                        document.getId(),
+                        document.getString("name"));
+                subjects.add(subject);
+            }
+
+            attendanceRef().get().addOnSuccessListener(attSnapshot -> {
+
+                attendanceRecords.clear();
+
+                for (DocumentSnapshot document : attSnapshot) {
+                    AttendanceRecord record = new AttendanceRecord(
+                            document.getString("subjectId"),
+                            document.getString("date"),
+                            document.getString("status"));
+                    attendanceRecords.add(record);
+                }
+
+                Collections.sort(attendanceRecords,
+                        (a, b) -> b.date.compareTo(a.date));
+
+                loadSubjects();
+                updateDashboard();
+
+            }).addOnFailureListener(error ->
+                    showError(error.getMessage()));
+
+        }).addOnFailureListener(error ->
+                showError(error.getMessage()));
+    }
+
+    // ---------------- ADD SUBJECT ----------------
+
     private void showAddSubjectDialog() {
+
         EditText input = createInput("Enter subject name");
 
         new AlertDialog.Builder(this)
                 .setTitle("Add New Subject")
                 .setView(input)
                 .setPositiveButton("Add", (dialog, which) -> {
+
                     String name = input.getText().toString().trim();
 
                     if (name.isEmpty()) {
@@ -78,35 +246,48 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    if (database.addSubject(name)) {
-                        showToast("Subject added successfully");
-                        loadSubjects();
-                        updateDashboard();
-                    } else {
-                        showToast("This subject already exists");
+                    for (Subject subject : subjects) {
+                        if (subject.name.equalsIgnoreCase(name)) {
+                            showToast("This subject already exists");
+                            return;
+                        }
                     }
+
+                    String id = subjectsRef().document().getId();
+
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("id", id);
+                    data.put("name", name);
+
+                    subjectsRef().document(id).set(data)
+                            .addOnSuccessListener(unused -> {
+                                showToast("Subject added successfully");
+                                loadFirebaseData();
+                            })
+                            .addOnFailureListener(error ->
+                                    showError(error.getMessage()));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
     private EditText createInput(String hint) {
+
         EditText input = new EditText(this);
         input.setHint(hint);
         input.setSingleLine(true);
         input.setTextColor(DARK_TEXT);
-        input.setHintTextColor(Color.rgb(105, 120, 140));
+        input.setHintTextColor(Color.GRAY);
         input.setPadding(24, 16, 24, 16);
-        input.setBackgroundTintList(
-                ColorStateList.valueOf(BRIGHT_BLUE)
-        );
+
         return input;
     }
 
-    private void loadSubjects() {
-        subjectListContainer.removeAllViews();
+    // ---------------- SUBJECT LIST ----------------
 
-        ArrayList<Subject> subjects = database.getAllSubjects();
+    private void loadSubjects() {
+
+        subjectListContainer.removeAllViews();
 
         if (subjects.isEmpty()) {
             TextView empty = new TextView(this);
@@ -120,18 +301,18 @@ public class MainActivity extends Activity {
         }
 
         for (Subject subject : subjects) {
+
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(20, 18, 20, 18);
-            card.setBackground(createRoundedBackground(
-                    Color.rgb(23, 68, 119), 18
-            ));
+            card.setBackground(createBackground(
+                    Color.rgb(23, 68, 119), 18));
 
             LinearLayout.LayoutParams params =
                     new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                    );
+                            LinearLayout.LayoutParams.WRAP_CONTENT);
+
             params.setMargins(0, 0, 0, 14);
             card.setLayoutParams(params);
 
@@ -141,30 +322,37 @@ public class MainActivity extends Activity {
             name.setTextSize(17);
             name.setTypeface(null, Typeface.BOLD);
 
+            int present = countForSubject(subject.id, "Present");
+            int absent = countForSubject(subject.id, "Absent");
+            int total = present + absent;
+
+            int percentage = total == 0 ? 0 :
+                    Math.round(present * 100f / total);
+
             TextView details = new TextView(this);
-            details.setText("Tap to manage subject");
+            details.setText("Attendance: " + percentage + "%   |   "
+                    + present + " Present   |   "
+                    + absent + " Absent");
             details.setTextColor(LIGHT_TEXT);
             details.setTextSize(12);
-            details.setPadding(0, 6, 0, 0);
+            details.setPadding(0, 8, 0, 0);
 
             card.addView(name);
             card.addView(details);
 
-            card.setOnClickListener(v -> showSubjectOptions(subject));
+            card.setOnClickListener(v ->
+                    showSubjectOptions(subject));
+
             subjectListContainer.addView(card);
         }
     }
 
-    private GradientDrawable createRoundedBackground(int color, int radius) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        drawable.setStroke(1, Color.rgb(36, 102, 168));
-        return drawable;
-    }
+    // ---------------- SUBJECT OPTIONS ----------------
 
     private void showSubjectOptions(Subject subject) {
+
         String[] options = {
+                "View Subject Attendance Summary",
                 "Mark Attendance",
                 "View Attendance History",
                 "Rename Subject",
@@ -174,20 +362,43 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle(subject.name)
                 .setItems(options, (dialog, which) -> {
+
                     if (which == 0) {
-                        showMarkAttendanceDialog(subject);
+                        showSubjectSummary(subject);
                     } else if (which == 1) {
-                        showAttendanceHistory(subject);
+                        showMarkAttendanceDialog(subject);
                     } else if (which == 2) {
-                        showRenameSubjectDialog(subject);
+                        showAttendanceHistory(subject);
+                    } else if (which == 3) {
+                        showRenameDialog(subject);
                     } else {
-                        showRemoveSubjectDialog(subject);
+                        showRemoveDialog(subject);
                     }
                 })
                 .show();
     }
 
-    private void showRenameSubjectDialog(Subject subject) {
+    private void showSubjectSummary(Subject subject) {
+
+        int present = countForSubject(subject.id, "Present");
+        int absent = countForSubject(subject.id, "Absent");
+        int total = present + absent;
+
+        int percentage = total == 0 ? 0 :
+                Math.round(present * 100f / total);
+
+        new AlertDialog.Builder(this)
+                .setTitle(subject.name + " - Summary")
+                .setMessage("Attendance Percentage: " + percentage + "%\n\n"
+                        + "Total Lectures: " + total + "\n"
+                        + "Present: " + present + "\n"
+                        + "Absent: " + absent)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    private void showRenameDialog(Subject subject) {
+
         EditText input = createInput("Enter new subject name");
         input.setText(subject.name);
 
@@ -195,689 +406,447 @@ public class MainActivity extends Activity {
                 .setTitle("Rename Subject")
                 .setView(input)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    String newName = input.getText().toString().trim();
 
-                    if (newName.isEmpty()) {
+                    String name = input.getText().toString().trim();
+
+                    if (name.isEmpty()) {
                         showToast("Please enter a subject name");
                         return;
                     }
 
-                    if (database.updateSubject(subject.id, newName)) {
-                        showToast("Subject renamed successfully");
-                        loadSubjects();
-                    } else {
-                        showToast("This subject name already exists");
+                    for (Subject item : subjects) {
+                        if (!item.id.equals(subject.id)
+                                && item.name.equalsIgnoreCase(name)) {
+                            showToast("This subject already exists");
+                            return;
+                        }
                     }
+
+                    Map<String, Object> update = new HashMap<>();
+                    update.put("name", name);
+
+                    subjectsRef().document(subject.id).update(update)
+                            .addOnSuccessListener(unused -> {
+                                showToast("Subject renamed successfully");
+                                loadFirebaseData();
+                            })
+                            .addOnFailureListener(error ->
+                                    showError(error.getMessage()));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void showRemoveSubjectDialog(Subject subject) {
+    private void showRemoveDialog(Subject subject) {
+
         new AlertDialog.Builder(this)
                 .setTitle("Remove Subject")
-                .setMessage("Are you sure you want to remove " +
-                        subject.name + " and its attendance records?")
+                .setMessage("Remove " + subject.name
+                        + " and its attendance records?")
                 .setPositiveButton("Remove", (dialog, which) -> {
-                    if (database.deleteSubject(subject.id)) {
-                        showToast("Subject removed successfully");
-                        loadSubjects();
-                        updateDashboard();
-                    } else {
-                        showToast("Unable to remove subject");
-                    }
+
+                    attendanceRef()
+                            .whereEqualTo("subjectId", subject.id)
+                            .get()
+                            .addOnSuccessListener(snapshot -> {
+
+                                WriteBatch batch = firestore.batch();
+
+                                for (DocumentSnapshot document : snapshot) {
+                                    batch.delete(document.getReference());
+                                }
+
+                                batch.delete(subjectsRef()
+                                        .document(subject.id));
+
+                                batch.commit()
+                                        .addOnSuccessListener(unused -> {
+                                            showToast("Subject removed");
+                                            loadFirebaseData();
+                                        })
+                                        .addOnFailureListener(error ->
+                                                showError(error.getMessage()));
+                            })
+                            .addOnFailureListener(error ->
+                                    showError(error.getMessage()));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
+    // ---------------- MARK ATTENDANCE ----------------
+
     private void showMarkAttendanceDialog(Subject subject) {
+
         Calendar calendar = Calendar.getInstance();
 
-        DatePickerDialog datePicker = new DatePickerDialog(
-                this,
-                (view, year, month, dayOfMonth) -> {
-                    Calendar selected = Calendar.getInstance();
-                    selected.set(year, month, dayOfMonth);
+        DatePickerDialog picker = new DatePickerDialog(this,
+                (view, year, month, day) -> {
 
-                    String date = formatDate(selected);
+                    Calendar selected = Calendar.getInstance();
+                    selected.set(year, month, day);
+
+                    String date = new SimpleDateFormat(
+                            "yyyy-MM-dd", Locale.getDefault())
+                            .format(selected.getTime());
+
                     showAttendanceStatusDialog(subject, date);
                 },
                 calendar.get(Calendar.YEAR),
                 calendar.get(Calendar.MONTH),
-                calendar.get(Calendar.DAY_OF_MONTH)
-        );
+                calendar.get(Calendar.DAY_OF_MONTH));
 
-        datePicker.getDatePicker().setMaxDate(System.currentTimeMillis());
-        datePicker.setTitle("Select Lecture Date");
-        datePicker.show();
+        picker.getDatePicker().setMaxDate(System.currentTimeMillis());
+        picker.setTitle("Select Lecture Date");
+        picker.show();
     }
 
-    private void showAttendanceStatusDialog(Subject subject, String date) {
+    private void showAttendanceStatusDialog(
+            Subject subject, String date) {
+
         String[] statuses = {"Present", "Absent"};
 
         new AlertDialog.Builder(this)
                 .setTitle("Mark Attendance - " + date)
-                .setItems(statuses, (dialog, which) -> {
-                    saveAttendance(subject, date, statuses[which]);
-                })
+                .setItems(statuses, (dialog, which) ->
+                        saveAttendance(subject, date, statuses[which]))
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private String attendanceDocumentId(String subjectId, String date) {
+        return subjectId + "_" + date;
     }
 
     private void saveAttendance(
             Subject subject, String date, String status) {
 
-        String existingStatus =
-                database.getAttendanceStatus(subject.id, date);
+        String documentId = attendanceDocumentId(subject.id, date);
 
-        if (existingStatus != null &&
-                existingStatus.equals(status)) {
-            showToast("Attendance already marked as " + status + "!");
-            return;
-        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("id", documentId);
+        data.put("subjectId", subject.id);
+        data.put("date", date);
+        data.put("status", status);
 
-        boolean saved = database.saveAttendance(
-                subject.id, date, status);
+        attendanceRef().document(documentId).get()
+                .addOnSuccessListener(document -> {
 
-        if (saved) {
-            if (existingStatus != null) {
-                showToast("Attendance updated successfully");
-            } else {
-                showToast("Attendance saved successfully");
-            }
-            loadSubjects();
-            updateDashboard();
-        } else {
-            showToast("Unable to save attendance");
-        }
+                    if (document.exists()
+                            && status.equals(document.getString("status"))) {
+                        showToast("Already marked as " + status);
+                        return;
+                    }
+
+                    attendanceRef().document(documentId).set(data)
+                            .addOnSuccessListener(unused -> {
+                                showToast("Attendance saved");
+                                loadFirebaseData();
+                            })
+                            .addOnFailureListener(error ->
+                                    showError(error.getMessage()));
+                })
+                .addOnFailureListener(error ->
+                        showError(error.getMessage()));
     }
 
-    // ---------------- ATTENDANCE HISTORY DESIGN ----------------
+    // ---------------- ATTENDANCE HISTORY ----------------
 
     private void showAttendanceHistory(Subject subject) {
-        ArrayList<AttendanceRecord> records =
-                database.getAttendanceHistory(subject.id);
 
-        LinearLayout historyLayout = new LinearLayout(this);
-        historyLayout.setOrientation(LinearLayout.VERTICAL);
-        historyLayout.setPadding(16, 12, 16, 12);
+        List<AttendanceRecord> records = new ArrayList<>();
+
+        for (AttendanceRecord record : attendanceRecords) {
+            if (record.subjectId.equals(subject.id)) {
+                records.add(record);
+            }
+        }
+
+        Collections.sort(records,
+                (a, b) -> b.date.compareTo(a.date));
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(16, 12, 16, 12);
 
         if (records.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText("No attendance records available.");
             empty.setTextColor(DARK_TEXT);
-            empty.setTextSize(15);
             empty.setGravity(Gravity.CENTER);
-            empty.setPadding(12, 35, 12, 35);
-            historyLayout.addView(empty);
-        } else {
-            for (AttendanceRecord record : records) {
-                historyLayout.addView(
-                        createHistoryCard(subject, record)
-                );
-            }
+            empty.setPadding(12, 30, 12, 30);
+            layout.addView(empty);
         }
 
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
-        scrollView.addView(historyLayout);
+        for (AttendanceRecord record : records) {
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(16, 14, 16, 14);
+
+            int color = record.status.equals("Present")
+                    ? Color.rgb(225, 248, 235)
+                    : Color.rgb(255, 232, 238);
+
+            card.setBackground(createBackground(color, 14));
+
+            TextView date = new TextView(this);
+            date.setText(record.date + "   -   " + record.status);
+            date.setTextColor(DARK_TEXT);
+            date.setTextSize(15);
+            date.setTypeface(null, Typeface.BOLD);
+
+            LinearLayout buttons = new LinearLayout(this);
+            buttons.setOrientation(LinearLayout.HORIZONTAL);
+
+            Button edit = new Button(this);
+            edit.setText("Edit");
+            edit.setAllCaps(false);
+
+            Button delete = new Button(this);
+            delete.setText("Delete");
+            delete.setAllCaps(false);
+
+            LinearLayout.LayoutParams buttonParams =
+                    new LinearLayout.LayoutParams(0, -2, 1);
+
+            buttons.addView(edit, buttonParams);
+            buttons.addView(delete, buttonParams);
+
+            edit.setOnClickListener(v ->
+                    showEditAttendanceDialog(subject, record));
+
+            delete.setOnClickListener(v ->
+                    confirmDeleteAttendance(subject, record));
+
+            card.addView(date);
+            card.addView(buttons);
+
+            LinearLayout.LayoutParams params =
+                    new LinearLayout.LayoutParams(-1, -2);
+            params.setMargins(0, 0, 0, 12);
+            card.setLayoutParams(params);
+
+            layout.addView(card);
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(layout);
 
         new AlertDialog.Builder(this)
                 .setTitle(subject.name + " - Attendance History")
-                .setView(scrollView)
+                .setView(scroll)
                 .setPositiveButton("Close", null)
                 .show();
     }
 
-    private LinearLayout createHistoryCard(
-            Subject subject, AttendanceRecord record) {
-
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(16, 15, 16, 15);
-
-        int cardColor = record.status.equals("Present")
-                ? Color.rgb(230, 250, 239)
-                : Color.rgb(255, 235, 239);
-
-        card.setBackground(createRoundedBackground(cardColor, 14));
-
-        LinearLayout.LayoutParams cardParams =
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                );
-        cardParams.setMargins(0, 0, 0, 12);
-        card.setLayoutParams(cardParams);
-
-        // Date and status row
-        LinearLayout topRow = new LinearLayout(this);
-        topRow.setOrientation(LinearLayout.HORIZONTAL);
-        topRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView dateText = new TextView(this);
-        dateText.setText(record.date);
-        dateText.setTextColor(DARK_TEXT);
-        dateText.setTextSize(15);
-        dateText.setTypeface(null, Typeface.BOLD);
-
-        LinearLayout.LayoutParams dateParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        1
-                );
-        dateText.setLayoutParams(dateParams);
-
-        TextView statusBadge = new TextView(this);
-        statusBadge.setText(record.status.toUpperCase(Locale.getDefault()));
-        statusBadge.setTextSize(11);
-        statusBadge.setTypeface(null, Typeface.BOLD);
-        statusBadge.setGravity(Gravity.CENTER);
-        statusBadge.setPadding(13, 8, 13, 8);
-
-        if (record.status.equals("Present")) {
-            statusBadge.setTextColor(Color.rgb(15, 115, 65));
-            statusBadge.setBackground(
-                    createRoundedBackground(
-                            Color.rgb(190, 240, 211), 30
-                    )
-            );
-        } else {
-            statusBadge.setTextColor(Color.rgb(175, 45, 75));
-            statusBadge.setBackground(
-                    createRoundedBackground(
-                            Color.rgb(255, 205, 216), 30
-                    )
-            );
-        }
-
-        topRow.addView(dateText);
-        topRow.addView(statusBadge);
-
-        // Edit and Delete buttons
-        LinearLayout buttonRow = new LinearLayout(this);
-        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
-        buttonRow.setGravity(Gravity.CENTER_VERTICAL);
-        buttonRow.setPadding(0, 14, 0, 0);
-
-        Button editButton = new Button(this);
-        editButton.setText("Edit");
-        editButton.setTextSize(12);
-        editButton.setAllCaps(false);
-        editButton.setTextColor(WHITE);
-        editButton.setBackgroundTintList(
-                ColorStateList.valueOf(BLUE)
-        );
-
-        LinearLayout.LayoutParams editParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(42),
-                        1
-                );
-        editParams.setMargins(0, 0, 6, 0);
-        editButton.setLayoutParams(editParams);
-
-        Button deleteButton = new Button(this);
-        deleteButton.setText("Delete");
-        deleteButton.setTextSize(12);
-        deleteButton.setAllCaps(false);
-        deleteButton.setTextColor(WHITE);
-        deleteButton.setBackgroundTintList(
-                ColorStateList.valueOf(Color.rgb(205, 65, 90))
-        );
-
-        LinearLayout.LayoutParams deleteParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(42),
-                        1
-                );
-        deleteParams.setMargins(6, 0, 0, 0);
-        deleteButton.setLayoutParams(deleteParams);
-
-        editButton.setOnClickListener(v ->
-                showEditAttendanceDatePicker(subject, record)
-        );
-
-        deleteButton.setOnClickListener(v ->
-                showDeleteAttendanceConfirmation(subject, record)
-        );
-
-        buttonRow.addView(editButton);
-        buttonRow.addView(deleteButton);
-
-        card.addView(topRow);
-        card.addView(buttonRow);
-
-        return card;
-    }
-
-    private int dp(int value) {
-        return (int) (value * getResources()
-                .getDisplayMetrics().density + 0.5f);
-    }
-
     // ---------------- EDIT ATTENDANCE ----------------
 
-    private void showEditAttendanceDatePicker(
+    private void showEditAttendanceDialog(
             Subject subject, AttendanceRecord record) {
+
+        String[] statuses = {"Present", "Absent"};
 
         Calendar calendar = Calendar.getInstance();
 
         try {
-            Date parsedDate = new SimpleDateFormat(
-                    "yyyy-MM-dd", Locale.getDefault()
-            ).parse(record.date);
-
-            if (parsedDate != null) {
-                calendar.setTime(parsedDate);
-            }
-        } catch (ParseException e) {
-            showToast("Unable to read the attendance date");
+            calendar.setTime(new SimpleDateFormat(
+                    "yyyy-MM-dd", Locale.getDefault())
+                    .parse(record.date));
+        } catch (Exception e) {
+            showError("Invalid attendance date");
             return;
         }
 
-        DatePickerDialog datePicker = new DatePickerDialog(
-                this,
-                (view, year, month, dayOfMonth) -> {
+        DatePickerDialog picker = new DatePickerDialog(this,
+                (view, year, month, day) -> {
+
                     Calendar selected = Calendar.getInstance();
-                    selected.set(year, month, dayOfMonth);
+                    selected.set(year, month, day);
 
-                    String newDate = formatDate(selected);
+                    String newDate = new SimpleDateFormat(
+                            "yyyy-MM-dd", Locale.getDefault())
+                            .format(selected.getTime());
 
-                    showEditAttendanceStatusDialog(
-                            subject, record, newDate
-                    );
+                    new AlertDialog.Builder(this)
+                            .setTitle("Select New Status")
+                            .setSingleChoiceItems(statuses,
+                                    record.status.equals("Present") ? 0 : 1,
+                                    (dialog, which) -> {
+
+                                        dialog.dismiss();
+
+                                        updateAttendanceRecord(
+                                                subject, record,
+                                                newDate, statuses[which]);
+                                    })
+                            .setNegativeButton("Cancel", null)
+                            .show();
                 },
                 calendar.get(Calendar.YEAR),
                 calendar.get(Calendar.MONTH),
-                calendar.get(Calendar.DAY_OF_MONTH)
-        );
+                calendar.get(Calendar.DAY_OF_MONTH));
 
-        datePicker.getDatePicker().setMaxDate(System.currentTimeMillis());
-        datePicker.setTitle("Choose Correct Date");
-        datePicker.show();
+        picker.getDatePicker().setMaxDate(System.currentTimeMillis());
+        picker.show();
     }
 
-    private void showEditAttendanceStatusDialog(
+    private void updateAttendanceRecord(
             Subject subject,
-            AttendanceRecord record,
-            String newDate) {
+            AttendanceRecord oldRecord,
+            String newDate,
+            String newStatus) {
 
-        String[] statuses = {"Present", "Absent"};
+        String oldId = attendanceDocumentId(
+                subject.id, oldRecord.date);
 
-        new AlertDialog.Builder(this)
-                .setTitle("Select Attendance Status")
-                .setSingleChoiceItems(
-                        statuses,
-                        record.status.equals("Present") ? 0 : 1,
-                        (dialog, which) -> {
-                            String newStatus = statuses[which];
+        String newId = attendanceDocumentId(
+                subject.id, newDate);
 
-                            int result = database.updateAttendance(
-                                    subject.id,
-                                    record.date,
-                                    newDate,
-                                    newStatus
-                            );
+        attendanceRef().document(newId).get()
+                .addOnSuccessListener(existing -> {
 
-                            dialog.dismiss();
+                    if (existing.exists()
+                            && !newDate.equals(oldRecord.date)) {
+                        showToast("A record already exists for this date");
+                        return;
+                    }
 
-                            if (result == 1) {
-                                showToast("Attendance updated successfully");
-                                loadSubjects();
-                                updateDashboard();
-                                showAttendanceHistory(subject);
-                            } else if (result == -1) {
-                                showToast(
-                                        "An attendance record already exists for this date"
-                                );
-                            } else {
-                                showToast("Unable to update attendance");
-                            }
-                        }
-                )
-                .setNegativeButton("Cancel", null)
-                .show();
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("id", newId);
+                    data.put("subjectId", subject.id);
+                    data.put("date", newDate);
+                    data.put("status", newStatus);
+
+                    WriteBatch batch = firestore.batch();
+
+                    if (!oldId.equals(newId)) {
+                        batch.delete(attendanceRef().document(oldId));
+                    }
+
+                    batch.set(attendanceRef().document(newId), data);
+
+                    batch.commit()
+                            .addOnSuccessListener(unused -> {
+                                showToast("Attendance updated");
+                                loadFirebaseData();
+                            })
+                            .addOnFailureListener(error ->
+                                    showError(error.getMessage()));
+                })
+                .addOnFailureListener(error ->
+                        showError(error.getMessage()));
     }
 
     // ---------------- DELETE ATTENDANCE ----------------
 
-    private void showDeleteAttendanceConfirmation(
+    private void confirmDeleteAttendance(
             Subject subject, AttendanceRecord record) {
 
         new AlertDialog.Builder(this)
                 .setTitle("Delete Attendance")
-                .setMessage("Are you sure you want to delete the " +
-                        record.status + " record for " + record.date + "?")
+                .setMessage("Delete " + record.status
+                        + " record for " + record.date + "?")
                 .setPositiveButton("Delete", (dialog, which) -> {
-                    if (database.deleteAttendance(
-                            subject.id, record.date)) {
 
-                        showToast("Attendance record deleted");
-                        loadSubjects();
-                        updateDashboard();
-                        showAttendanceHistory(subject);
+                    String id = attendanceDocumentId(
+                            subject.id, record.date);
 
-                    } else {
-                        showToast("Unable to delete attendance");
-                    }
+                    attendanceRef().document(id).delete()
+                            .addOnSuccessListener(unused -> {
+                                showToast("Attendance deleted");
+                                loadFirebaseData();
+                            })
+                            .addOnFailureListener(error ->
+                                    showError(error.getMessage()));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private String formatDate(Calendar calendar) {
-        return new SimpleDateFormat(
-                "yyyy-MM-dd", Locale.getDefault()
-        ).format(calendar.getTime());
-    }
-
     // ---------------- DASHBOARD ----------------
 
     private void updateDashboard() {
-        int subjectCount = database.getSubjectCount();
-        int presentCount = database.getAttendanceCount("Present");
-        int absentCount = database.getAttendanceCount("Absent");
 
-        int total = presentCount + absentCount;
-        int percentage = total == 0
-                ? 0
-                : Math.round((presentCount * 100f) / total);
+        int present = 0;
+        int absent = 0;
 
-        txtSubjects.setText(String.valueOf(subjectCount));
-        txtPresent.setText(String.valueOf(presentCount));
-        txtAbsent.setText(String.valueOf(absentCount));
+        for (AttendanceRecord record : attendanceRecords) {
+            if ("Present".equals(record.status)) {
+                present++;
+            } else if ("Absent".equals(record.status)) {
+                absent++;
+            }
+        }
+
+        int total = present + absent;
+
+        int percentage = total == 0 ? 0 :
+                Math.round(present * 100f / total);
+
+        txtSubjects.setText(String.valueOf(subjects.size()));
+        txtPresent.setText(String.valueOf(present));
+        txtAbsent.setText(String.valueOf(absent));
         txtPercentage.setText(percentage + "%");
-        attendanceProgress.setProgress(percentage);
+
+        circularProgress.setProgress(percentage);
+    }
+
+    private int countForSubject(String subjectId, String status) {
+
+        int count = 0;
+
+        for (AttendanceRecord record : attendanceRecords) {
+            if (record.subjectId.equals(subjectId)
+                    && record.status.equals(status)) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    // ---------------- UI HELPERS ----------------
+
+    private GradientDrawable createBackground(int color, int radius) {
+
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        drawable.setStroke(1, Color.rgb(36, 102, 168));
+
+        return drawable;
     }
 
     private void showToast(String message) {
-        Toast.makeText(
-                this, message, Toast.LENGTH_SHORT
-        ).show();
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
 
-    // ---------------- DATABASE ----------------
-
-    private static class SubjectDatabase extends SQLiteOpenHelper {
-
-        private static final String DATABASE_NAME = "AttendMate.db";
-        private static final int DATABASE_VERSION = 2;
-
-        SubjectDatabase(Context context) {
-            super(context, DATABASE_NAME, null, DATABASE_VERSION);
-        }
-
-        @Override
-        public void onCreate(SQLiteDatabase db) {
-            db.execSQL(
-                    "CREATE TABLE subjects (" +
-                            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                            "name TEXT NOT NULL COLLATE NOCASE UNIQUE)"
-            );
-
-            createAttendanceTable(db);
-        }
-
-        private void createAttendanceTable(SQLiteDatabase db) {
-            db.execSQL(
-                    "CREATE TABLE IF NOT EXISTS attendance (" +
-                            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                            "subject_id INTEGER NOT NULL, " +
-                            "date TEXT NOT NULL, " +
-                            "status TEXT NOT NULL, " +
-                            "UNIQUE(subject_id, date), " +
-                            "FOREIGN KEY(subject_id) REFERENCES subjects(id))"
-            );
-        }
-
-        @Override
-        public void onUpgrade(
-                SQLiteDatabase db, int oldVersion, int newVersion) {
-
-            if (oldVersion < 2) {
-                createAttendanceTable(db);
-            }
-        }
-
-        boolean addSubject(String name) {
-            SQLiteDatabase db = getWritableDatabase();
-            ContentValues values = new ContentValues();
-            values.put("name", name);
-
-            return db.insert("subjects", null, values) != -1;
-        }
-
-        boolean updateSubject(int id, String newName) {
-            SQLiteDatabase db = getWritableDatabase();
-            ContentValues values = new ContentValues();
-            values.put("name", newName);
-
-            return db.update(
-                    "subjects",
-                    values,
-                    "id=?",
-                    new String[]{String.valueOf(id)}
-            ) > 0;
-        }
-
-        boolean deleteSubject(int id) {
-            SQLiteDatabase db = getWritableDatabase();
-            db.beginTransaction();
-
-            try {
-                db.delete(
-                        "attendance",
-                        "subject_id=?",
-                        new String[]{String.valueOf(id)}
-                );
-
-                int deleted = db.delete(
-                        "subjects",
-                        "id=?",
-                        new String[]{String.valueOf(id)}
-                );
-
-                db.setTransactionSuccessful();
-                return deleted > 0;
-
-            } finally {
-                db.endTransaction();
-            }
-        }
-
-        ArrayList<Subject> getAllSubjects() {
-            ArrayList<Subject> subjects = new ArrayList<>();
-            SQLiteDatabase db = getReadableDatabase();
-
-            Cursor cursor = db.rawQuery(
-                    "SELECT id, name FROM subjects ORDER BY name COLLATE NOCASE",
-                    null
-            );
-
-            try {
-                while (cursor.moveToNext()) {
-                    subjects.add(new Subject(
-                            cursor.getInt(0),
-                            cursor.getString(1)
-                    ));
-                }
-            } finally {
-                cursor.close();
-            }
-
-            return subjects;
-        }
-
-        int getSubjectCount() {
-            SQLiteDatabase db = getReadableDatabase();
-            Cursor cursor = db.rawQuery(
-                    "SELECT COUNT(*) FROM subjects", null
-            );
-
-            int count = 0;
-
-            if (cursor.moveToFirst()) {
-                count = cursor.getInt(0);
-            }
-
-            cursor.close();
-            return count;
-        }
-
-        boolean saveAttendance(
-                int subjectId, String date, String status) {
-
-            SQLiteDatabase db = getWritableDatabase();
-            ContentValues values = new ContentValues();
-            values.put("subject_id", subjectId);
-            values.put("date", date);
-            values.put("status", status);
-
-            return db.insertWithOnConflict(
-                    "attendance",
-                    null,
-                    values,
-                    SQLiteDatabase.CONFLICT_REPLACE
-            ) != -1;
-        }
-
-        String getAttendanceStatus(int subjectId, String date) {
-            SQLiteDatabase db = getReadableDatabase();
-
-            Cursor cursor = db.rawQuery(
-                    "SELECT status FROM attendance " +
-                            "WHERE subject_id=? AND date=?",
-                    new String[]{
-                            String.valueOf(subjectId), date
-                    }
-            );
-
-            String status = null;
-
-            if (cursor.moveToFirst()) {
-                status = cursor.getString(0);
-            }
-
-            cursor.close();
-            return status;
-        }
-
-        ArrayList<AttendanceRecord> getAttendanceHistory(int subjectId) {
-            ArrayList<AttendanceRecord> records = new ArrayList<>();
-            SQLiteDatabase db = getReadableDatabase();
-
-            Cursor cursor = db.rawQuery(
-                    "SELECT date, status FROM attendance " +
-                            "WHERE subject_id=? ORDER BY date DESC",
-                    new String[]{String.valueOf(subjectId)}
-            );
-
-            try {
-                while (cursor.moveToNext()) {
-                    records.add(new AttendanceRecord(
-                            cursor.getString(0),
-                            cursor.getString(1)
-                    ));
-                }
-            } finally {
-                cursor.close();
-            }
-
-            return records;
-        }
-
-        int updateAttendance(
-                int subjectId,
-                String oldDate,
-                String newDate,
-                String newStatus) {
-
-            SQLiteDatabase db = getWritableDatabase();
-
-            Cursor cursor = db.rawQuery(
-                    "SELECT id FROM attendance " +
-                            "WHERE subject_id=? AND date=?",
-                    new String[]{
-                            String.valueOf(subjectId), newDate
-                    }
-            );
-
-            boolean duplicate = cursor.moveToFirst()
-                    && !oldDate.equals(newDate);
-
-            cursor.close();
-
-            if (duplicate) {
-                return -1;
-            }
-
-            ContentValues values = new ContentValues();
-            values.put("date", newDate);
-            values.put("status", newStatus);
-
-            return db.update(
-                    "attendance",
-                    values,
-                    "subject_id=? AND date=?",
-                    new String[]{
-                            String.valueOf(subjectId), oldDate
-                    }
-            ) > 0 ? 1 : 0;
-        }
-
-        boolean deleteAttendance(int subjectId, String date) {
-            SQLiteDatabase db = getWritableDatabase();
-
-            return db.delete(
-                    "attendance",
-                    "subject_id=? AND date=?",
-                    new String[]{
-                            String.valueOf(subjectId), date
-                    }
-            ) > 0;
-        }
-
-        int getAttendanceCount(String status) {
-            SQLiteDatabase db = getReadableDatabase();
-
-            Cursor cursor = db.rawQuery(
-                    "SELECT COUNT(*) FROM attendance WHERE status=?",
-                    new String[]{status}
-            );
-
-            int count = 0;
-
-            if (cursor.moveToFirst()) {
-                count = cursor.getInt(0);
-            }
-
-            cursor.close();
-            return count;
-        }
+    private void showError(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
+
+    // ---------------- DATA MODELS ----------------
 
     private static class Subject {
-        int id;
+        String id;
         String name;
 
-        Subject(int id, String name) {
+        Subject(String id, String name) {
             this.id = id;
-            this.name = name;
+            this.name = name == null ? "" : name;
         }
     }
 
     private static class AttendanceRecord {
+        String subjectId;
         String date;
         String status;
 
-        AttendanceRecord(String date, String status) {
-            this.date = date;
-            this.status = status;
+        AttendanceRecord(String subjectId, String date, String status) {
+            this.subjectId = subjectId == null ? "" : subjectId;
+            this.date = date == null ? "" : date;
+            this.status = status == null ? "" : status;
         }
     }
 }

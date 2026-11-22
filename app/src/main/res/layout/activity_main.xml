@@ -1,113 +1,138 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/bg_dashboard"
-    android:fillViewport="true"
-    android:fitsSystemWindows="true">
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:padding="22dp">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="ATTENDMATE"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.18"
-            android:layout_marginTop="12dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Welcome back"
-            android:textColor="#FFFFFF"
-            android:textSize="27sp"
-            android:textStyle="bold"
-            android:layout_marginTop="20dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Manage your attendance in one place."
-            android:textColor="#B8C9E2"
-            android:textSize="14sp"
-            android:layout_marginTop="6dp" />
-
+        <!-- HEADER -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="@drawable/bg_card_white"
-            android:padding="20dp"
-            android:layout_marginTop="28dp">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Attendance Overview"
-                android:textColor="#FFFFFF"
-                android:textSize="17sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/txtPercentage"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="0%"
-                android:textColor="#FFFFFF"
-                android:textSize="34sp"
-                android:textStyle="bold"
-                android:layout_marginTop="14dp" />
-
-            <ProgressBar
-                android:id="@+id/attendanceProgress"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="match_parent"
-                android:layout_height="8dp"
-                android:max="100"
-                android:progress="0"
-                android:progressTint="#39A5FF"
-                android:progressBackgroundTint="#294563"
-                android:layout_marginTop="10dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Overall attendance percentage"
-                android:textColor="#B8C9E2"
-                android:textSize="12sp"
-                android:layout_marginTop="9dp" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Quick Statistics"
-            android:textColor="#FFFFFF"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:layout_marginTop="28dp"
-            android:layout_marginBottom="12dp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="100dp"
+                android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:orientation="vertical"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ATTENDMATE"
+                    android:textColor="#FFFFFF"
+                    android:textSize="25sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="Welcome back!"
+                    android:textColor="#B8C9E2"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/btnLogout"
+                android:layout_width="wrap_content"
+                android:layout_height="42dp"
+                android:backgroundTint="#1677E8"
+                android:text="Logout"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- OVERALL ATTENDANCE CARD -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:background="#12345B"
+            android:elevation="5dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="22dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="OVERALL ATTENDANCE"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <FrameLayout
+                android:layout_width="190dp"
+                android:layout_height="190dp"
+                android:layout_marginTop="20dp">
+
+                <com.example.attendmate.CircularProgressView
+                    android:id="@+id/attendanceCircularProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/txtPercentage"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0%"
+                        android:textColor="#FFFFFF"
+                        android:textSize="32sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:text="ATTENDANCE"
+                        android:textColor="#B8C9E2"
+                        android:textSize="10sp"
+                        android:textStyle="bold" />
+
+                </LinearLayout>
+            </FrameLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Your attendance performance"
+                android:textColor="#B8C9E2"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- QUICK STATISTICS -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="horizontal">
+
+            <!-- SUBJECTS -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="105dp"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:background="#12345B"
                 android:gravity="center"
-                android:background="@drawable/bg_subject_card"
+                android:orientation="vertical"
                 android:padding="10dp">
 
                 <TextView
@@ -116,28 +141,27 @@
                     android:layout_height="wrap_content"
                     android:text="0"
                     android:textColor="#FFFFFF"
-                    android:textSize="27sp"
+                    android:textSize="25sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
                     android:text="Subjects"
                     android:textColor="#B8C9E2"
                     android:textSize="12sp" />
             </LinearLayout>
 
-            <View
-                android:layout_width="10dp"
-                android:layout_height="1dp" />
-
+            <!-- PRESENT -->
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="100dp"
+                android:layout_height="105dp"
+                android:layout_marginHorizontal="6dp"
                 android:layout_weight="1"
-                android:orientation="vertical"
+                android:background="#123D42"
                 android:gravity="center"
-                android:background="@drawable/bg_present_card"
+                android:orientation="vertical"
                 android:padding="10dp">
 
                 <TextView
@@ -146,28 +170,27 @@
                     android:layout_height="wrap_content"
                     android:text="0"
                     android:textColor="#69DCA4"
-                    android:textSize="27sp"
+                    android:textSize="25sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
                     android:text="Present"
-                    android:textColor="#B8E8D0"
+                    android:textColor="#B8C9E2"
                     android:textSize="12sp" />
             </LinearLayout>
 
-            <View
-                android:layout_width="10dp"
-                android:layout_height="1dp" />
-
+            <!-- ABSENT -->
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="100dp"
+                android:layout_height="105dp"
+                android:layout_marginStart="6dp"
                 android:layout_weight="1"
-                android:orientation="vertical"
+                android:background="#482B3B"
                 android:gravity="center"
-                android:background="@drawable/bg_absent_card"
+                android:orientation="vertical"
                 android:padding="10dp">
 
                 <TextView
@@ -176,30 +199,32 @@
                     android:layout_height="wrap_content"
                     android:text="0"
                     android:textColor="#FF829B"
-                    android:textSize="27sp"
+                    android:textSize="25sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
                     android:text="Absent"
-                    android:textColor="#F2C0CD"
+                    android:textColor="#B8C9E2"
                     android:textSize="12sp" />
             </LinearLayout>
         </LinearLayout>
 
+        <!-- MY SUBJECTS HEADER -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="30dp"
             android:gravity="center_vertical"
-            android:layout_marginTop="30dp">
+            android:orientation="horizontal">
 
             <TextView
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="My Subjects"
+                android:text="MY SUBJECTS"
                 android:textColor="#FFFFFF"
                 android:textSize="19sp"
                 android:textStyle="bold" />
@@ -207,38 +232,20 @@
             <Button
                 android:id="@+id/btnAddSubject"
                 android:layout_width="wrap_content"
-                android:layout_height="42dp"
-                android:text="Add Subject"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
+                android:layout_height="45dp"
                 android:backgroundTint="#1677E8"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp" />
+                android:text="+ Add Subject"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- SUBJECT LIST -->
         <LinearLayout
             android:id="@+id/subjectListContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="@drawable/bg_card_white"
-            android:padding="16dp"
-            android:layout_marginTop="14dp">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="No subjects added yet.\nAdd your first subject to get started."
-                android:textColor="#B8C9E2"
-                android:textSize="14sp"
-                android:gravity="center"
-                android:padding="18dp" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="24dp" />
+            android:layout_marginTop="15dp"
+            android:orientation="vertical" />
 
     </LinearLayout>
 </ScrollView>
