@@ -22,4 +22,6 @@ AttendMate is an Android application developed to help students manage and monit
 The main purpose of AttendMate is to make student attendance management easier, more organised, and convenient through a mobile application.
 
 ## Developer
+D. G. C keshara
+GWU-HICT-2022-29
 Developed as an individual academic project.
